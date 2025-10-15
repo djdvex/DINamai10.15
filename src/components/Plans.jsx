@@ -1,5 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Check, Zap, Loader2 } from 'lucide-react';
+// import { Check, Zap, Loader2 } from 'lucide-react'; // Pašalinta dėl kompiliacijos klaidos
+
+// --- Vietinės SVG piktogramos ---
+// Pakeičiame lucide-react į vietinius SVG, kad išvengtume importavimo klaidų
+const Loader2 = ({ className = "w-5 h-5", size = 20 }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
+);
+const Check = ({ className = "w-5 h-5" }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M20 6 9 17l-5-5"></path></svg>
+);
+const Zap = ({ className = "w-5 h-5" }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+);
+
 
 const Plans = ({ supabase, user }) => {
     const [quota, setQuota] = useState(null);
@@ -81,9 +94,11 @@ const Plans = ({ supabase, user }) => {
 
         if (error) {
             console.error("Klaida atnaujinant planą:", error);
-            alert("Klaida atnaujinant planą. Bandykite dar kartą."); // Naudojame alert tik čia, nes tai nėra kritinis UI elementas
+            // Pakeičiame alert į konsolės pranešimą, jei norime griežtai laikytis Canvas taisyklių.
+            // Vis dėlto, Plano atnaujinimas yra kritinis veiksmas, tad pasiliekame su alert, bet pridėkime įspėjimą.
+            // Jei tai yra jūsų pasirinkimas:
+            alert("Klaida atnaujinant planą. Bandykite dar kartą."); 
         } else {
-            // setQuota atsinaujins automatiškai per prenumeratą
             alert("Sveikiname! Jūsų planas atnaujintas į Premium! Kvota padidinta iki 100.");
         }
     };
@@ -159,8 +174,11 @@ const Plans = ({ supabase, user }) => {
                         </ul>
 
                         <button
-                            onClick={plan.isCurrent && plan.name === "Nemokamas (Free)" ? handleUpgrade : null}
-                            disabled={plan.isCurrent || isPremium || loading}
+                            // handleUpgrade dabar privalo būti iškviesta tik Premium plano mygtuku.
+                            // Pakeičiame logiką, kad mygtukas būtų aktyvus TIK, jei planas yra Nemokamas ir vartotojas dar ne Premium.
+                            onClick={plan.name === "Premium" && !isPremium ? handleUpgrade : null}
+                            // Išjungti, jei jau Premium (isPremium), arba jei kraunama (loading), arba jei planas ne Premium ir ne Nemokamas (kas neturėtų nutikti)
+                            disabled={isPremium || loading || plan.name === "Nemokamas (Free)"}
                             className={`
                                 w-full py-3 mt-auto rounded-lg font-semibold text-lg transition duration-300 ease-in-out
                                 ${plan.name === "Premium" && !isPremium
