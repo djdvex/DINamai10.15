@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { createClient } from '@supabase/supabase-js';
+// Supabase dabar bus importuojamas per CDN, o ne kaip paketas. 
+// Ši eilutė yra nereikalinga, bet paliekame, kad būtų aišku:
+// import { createClient } from '@supabase/supabase-js'; 
 
 // --- Globalios ir Komponentų dalys, sujungtos į vieną failą ---
 
-// --- 1. Piktogramos (iš Chat/Plans, dabar čia) ---
+// --- 1. Piktogramos ---
 const MessageSquare = ({ className = "w-6 h-6" }) => (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m3 21 1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"></path></svg>
 );
@@ -20,28 +22,31 @@ const Check = ({ className = "w-5 h-5" }) => (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M20 6 9 17l-5-5"></path></svg>
 );
 
-// --- 2. Konstanta ir API funkcija (iš Chat, dabar čia) ---
+// --- 2. Konstanta ir API funkcija (Gemini) ---
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=";
-const API_KEY = ""; // Naudosime automatizuotą Canvas raktą
+const API_KEY = ""; // Naudosime automatizuotą Canvas raktą (palikti tuščią!)
 const INITIAL_QUOTA = 20;
 const PREMIUM_QUOTA = 100;
 
 // Funkcija, kuri siunčia užklausą į Gemini API su backoff mechanizmu
 const generateGeminiContent = async (prompt, chatHistory) => {
-    const historyForAPI = chatHistory.map(msg => ({
-        role: msg.role === 'model' ? 'model' : 'user',
-        parts: [{ text: msg.text }]
-    }));
+    // API reikalavimai: Role gali būti tik 'user' arba 'model'
+    const historyForAPI = chatHistory
+        .filter(msg => msg.role !== 'system') // Išmetame sistemos žinutes (pvz., kvota baigėsi)
+        .map(msg => ({
+            role: msg.role === 'model' ? 'model' : 'user',
+            parts: [{ text: msg.text }]
+        }));
 
-    const contents = [...historyForAPI.slice(0, -1).filter(msg => msg.parts[0].text.trim() !== 'Jūsų nemokamų žinučių kvota baigėsi. Prisijunkite prie Premium plano!'), {
-        role: 'user',
-        parts: [{ text: prompt }]
-    }];
+    const contents = [
+        ...historyForAPI, 
+        { role: 'user', parts: [{ text: prompt }] }
+    ];
 
     const payload = {
         contents: contents,
         systemInstruction: {
-            parts: [{ text: "Jūs esate draugiškas, profesionalus DI Namams asistentas. Atsakinėkite trumpai ir aiškiai apie buitį, pirkinius, maisto gaminimą ir namų priežiūrą. Atsakykite tik lietuviškai." }]
+            parts: [{ text: "Jūs esate draugiškas, profesionalus DI Namams asistentas, naudojantis Google Gemini. Atsakinėkite trumpai ir aiškiai apie buitį, pirkinius, maisto gaminimą ir namų priežiūrą. Atsakykite tik lietuviškai." }]
         },
     };
 
@@ -50,7 +55,8 @@ const generateGeminiContent = async (prompt, chatHistory) => {
 
     while (attempts < maxAttempts) {
         try {
-            const response = await fetch(`${GEMINI_API_URL}${API_KEY}`, {
+            const url = `${GEMINI_API_URL}${API_KEY}`;
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -64,14 +70,17 @@ const generateGeminiContent = async (prompt, chatHistory) => {
             }
             
             if (!response.ok) {
-                 throw new Error(`API klaida: ${response.statusText}`);
+                 const errorBody = await response.text();
+                 console.error("Gemini API klaida atsake:", errorBody);
+                 throw new Error(`Gemini API klaida: ${response.statusText}`);
             }
 
             const result = await response.json();
             const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
             
             if (!text) {
-                throw new Error("Negauta jokio teksto atsakymo iš AI.");
+                console.warn("Gemini atsakymas negautas (galbūt filtravimas):", result);
+                throw new Error("Negauta jokio teksto atsakymo iš Gemini DI.");
             }
 
             return { text };
@@ -80,28 +89,42 @@ const generateGeminiContent = async (prompt, chatHistory) => {
             attempts++;
             if (attempts >= maxAttempts) {
                 console.error("Gemini API visi bandymai nepavyko:", error);
-                throw new Error("Nepavyko pasiekti DI asistento.");
+                throw new Error("Nepavyko pasiekti Gemini DI asistento.");
             }
             const delay = Math.pow(2, attempts) * 1000;
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
-    throw new Error("Nepavyko pasiekti DI asistento po kelių bandymų.");
+    throw new Error("Nepavyko pasiekti Gemini DI asistento po kelių bandymų.");
 };
 
 // --- 3. Supabase Konfigūracija ---
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-// REALIAM Supabase projekte, Jums reikėtų naudoti tikrus Supabase URL ir ANONYMOUS KEY.
-const SUPABASE_URL = "https://your-supabase-url.supabase.co"; // PAKEISTI!
-const SUPABASE_ANON_KEY = "your-anon-key"; // PAKEISTI!
+// Pakeiskite šias vietas į TIKRUS SUPABASE URL IR KEY.
+const SUPABASE_URL = "https://your-supabase-url.supabase.co"; 
+const SUPABASE_ANON_KEY = "your-anon-key"; 
 
+// Dinaminis Supabase kliento gavimas iš globalaus lango objekto po CDN įkėlimo
 let supabaseClient = null;
+
 try {
-    supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // Tikriname, ar nustatymai nėra pavyzdiniai
+    if (SUPABASE_URL.includes("your-supabase-url") || SUPABASE_ANON_KEY.includes("your-anon-key")) {
+        console.error("DĖMESIO: Supabase URL/Key yra pavyzdiniai. Prašome juos pakeisti.");
+    } else {
+        // Tikriname, ar createClient funkcija prieinama per CDN
+        if (window.supabase && window.supabase.createClient) {
+            supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        } else {
+            // Reikalinga atsarginė funkcija, jei CDN importas dar neįvyko arba nepasiekiamas
+            // Jei vykdymas vyksta po visiško įkėlimo, galima tiesiog naudoti createClient()
+            console.error("Supabase createClient funkcija nerasta 'window.supabase'. Patikrinkite CDN.");
+        }
+    }
 } catch (e) {
-    console.error("Supabase kliento inicializavimo klaida. Patikrinkite SUPABASE_URL ir SUPABASE_ANON_KEY.", e);
+    console.error("Supabase kliento inicializavimo klaida:", e);
 }
 
 
@@ -122,7 +145,7 @@ const ChatComponent = ({ supabase, user, quota, setQuota }) => {
     // Žinutės Siuntimas ir Kvotos Mažinimas
     const handleSend = async (e) => {
         e.preventDefault();
-        if (!input.trim() || loading || !userId) return;
+        if (!input.trim() || loading || !userId || !supabase) return; // Pridėtas patikrinimas, ar supabase prieinamas
         
         // Tikriname kvotą
         if (quota !== null && quota <= 0) {
@@ -130,6 +153,7 @@ const ChatComponent = ({ supabase, user, quota, setQuota }) => {
                 ...prevMessages,
                 { id: Date.now() + 1, role: 'system', text: "Jūsų nemokamų žinučių kvota baigėsi. Prisijunkite prie Premium plano!" }
             ]);
+            setInput('');
             return;
         }
 
@@ -146,6 +170,7 @@ const ChatComponent = ({ supabase, user, quota, setQuota }) => {
                 text: msg.text
             }));
 
+            // Iškviečiame Gemini API
             const { text: responseText } = await generateGeminiContent(userMessage.text, historyForAPI);
             
             const aiMessage = { id: Date.now() + 1, role: 'model', text: responseText };
@@ -161,16 +186,15 @@ const ChatComponent = ({ supabase, user, quota, setQuota }) => {
                     .select();
                 
                 if (updateError) {
-                    console.error("Klaida mažinant kvotą:", updateError);
+                    console.error("Klaida mažinant kvotą Supabase:", updateError);
                 }
-                // Kvotos būsena atsinaujins per globalų listenerį
             }
 
         } catch (error) {
             console.error("Pokalbio klaida:", error);
             setMessages((prevMessages) => [
                 ...prevMessages,
-                { id: Date.now() + 1, role: 'system', text: "Atsiprašau, nepavyko gauti atsakymo. Bandykite dar kartą." }
+                { id: Date.now() + 1, role: 'system', text: "Atsiprašau, nepavyko gauti atsakymo iš DI. Patikrinkite Supabase nustatymus ir API ryšį." }
             ]);
         } finally {
             setLoading(false);
@@ -180,7 +204,7 @@ const ChatComponent = ({ supabase, user, quota, setQuota }) => {
     return (
         <div className="chat-container">
             <div className="chat-header">
-                <h4 className="text-white text-lg font-semibold">DI Asistentas</h4>
+                <h4 className="text-white text-lg font-semibold">Gemini DI Asistentas</h4>
                 <p className="text-gray-400 text-sm">Pradėk pokalbį</p>
                 {/* Rodo likusią kvotą */}
                 <p className="text-sm font-medium" style={{color: quota > 5 ? '#34D399' : '#FBBF24'}}>
@@ -332,7 +356,7 @@ const PlansComponent = ({ supabase, user, quota, setQuota }) => {
     
     // Simuliuota Plano Atnaujinimo Funkcija
     const handleUpgrade = async () => {
-        if (!userId || loading || quota > INITIAL_QUOTA) return;
+        if (!userId || loading || quota > INITIAL_QUOTA || !supabase) return;
 
         setLoading(true);
 
@@ -345,9 +369,9 @@ const PlansComponent = ({ supabase, user, quota, setQuota }) => {
         setLoading(false);
 
         if (error) {
-            console.error("Klaida atnaujinant planą:", error);
-            // Pakeičiame alert į konsolės pranešimą, laikydamiesi taisyklių.
-            alert("Klaida atnaujinant planą. Bandykite dar kartą."); 
+            console.error("Klaida atnaujinant planą Supabase:", error);
+            // Pakeičiame alert į konsolės pranešimą.
+             alert("Klaida atnaujinant planą. Patikrinkite Supabase konsolės klaidas."); 
         } else {
             alert("Sveikiname! Jūsų planas atnaujintas į Premium! Kvota padidinta iki 100.");
         }
@@ -431,7 +455,7 @@ const PlansComponent = ({ supabase, user, quota, setQuota }) => {
                                     ? 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/50'
                                     : plan.isCurrent
                                     ? 'bg-gray-600 text-gray-300 cursor-default'
-                                    : 'bg-gray-600 text-gray-300 cursor-default' // Neturėtų nutikti, bet saugumui
+                                    : 'bg-gray-600 text-gray-300 cursor-default'
                                 }
                                 ${loading && 'opacity-70 cursor-wait'}
                             `}
@@ -456,9 +480,29 @@ const App = () => {
     const [activeTab, setActiveTab] = useState('chat'); // 'chat' arba 'plans'
     const [quota, setQuota] = useState(null); // Bendra kvotos būsena
 
+    // Funkcija, kuri inicijuoja Supabase kliento gavimą
+    const getSupabaseClient = useCallback(() => {
+        if (window.supabase && window.supabase.createClient && !supabaseClient) {
+            try {
+                if (SUPABASE_URL.includes("your-supabase-url") || SUPABASE_ANON_KEY.includes("your-anon-key")) {
+                    console.error("DĖMESIO: Supabase URL/Key yra pavyzdiniai. Prašome juos pakeisti.");
+                    return null;
+                }
+                // Nustatome globalų kliento kintamąjį, kad visi komponentai jį matytų
+                return window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            } catch (e) {
+                console.error("Supabase kliento inicializavimo klaida per getSupabaseClient:", e);
+                return null;
+            }
+        }
+        return supabaseClient;
+    }, []);
+
     // Vartotojo Autentifikavimas ir Kvotos Klausymas
     useEffect(() => {
-        if (!supabaseClient) {
+        const client = getSupabaseClient();
+        if (!client) {
+            // Jei negalime gauti kliento (dėl pavyzdinių raktų arba neįkeltos bibliotekos)
             setLoading(false);
             setUser({ id: 'mock-user-id-' + appId }); 
             return;
@@ -467,45 +511,43 @@ const App = () => {
         let authListener;
         
         // 1. Autentifikacijos klausymas
-        const { data: listener } = supabaseClient.auth.onAuthStateChange(
+        const { data: listener } = client.auth.onAuthStateChange(
             (event, session) => {
                 if (session) {
                     setUser(session.user);
                 } else {
                     setUser(null);
-                    handleSignIn();
+                    handleSignIn(client);
                 }
-                // setLoading(false);
             }
         );
         authListener = listener;
         
-        const handleSignIn = async () => {
+        const handleSignIn = async (sbClient) => {
             if (!initialAuthToken) {
-                 const { data, error } = await supabaseClient.auth.signInAnonymously();
+                 const { data, error } = await sbClient.auth.signInAnonymously();
                  if (error) {
                     console.error("Supabase anoniminio prisijungimo klaida:", error);
                  } else if (data.user) {
                     setUser(data.user);
                  }
             } else {
-                 const { data, error } = await supabaseClient.auth.signInWithCustomToken(initialAuthToken);
+                 const { data, error } = await sbClient.auth.signInWithCustomToken(initialAuthToken);
                  if (error) {
                     console.warn("Supabase prisijungimas per Custom Token nepavyko. Bandome anonimiškai.", error);
-                    await supabaseClient.auth.signInAnonymously();
+                    await sbClient.auth.signInAnonymously();
                  } else if (data.user) {
                     setUser(data.user);
                  }
             }
-            // setLoading(false); // Nustatome po pradinio kvotos įkėlimo
         };
         
         // Pradinis autentifikacijos patikrinimas
-        supabaseClient.auth.getSession().then(({ data: { session } }) => {
+        client.auth.getSession().then(({ data: { session } }) => {
             if (session) {
                 setUser(session.user);
             } else {
-                handleSignIn();
+                handleSignIn(client);
             }
         });
 
@@ -513,16 +555,17 @@ const App = () => {
              authListener?.subscription.unsubscribe();
         };
 
-    }, []);
+    }, [getSupabaseClient]);
 
     // Kvotos Įkėlimas ir Realaus Laiko Klausymas (priklauso nuo user)
     useEffect(() => {
-        if (!user || !supabaseClient) return;
+        const client = getSupabaseClient();
+        if (!user || !client) return;
 
         const userId = user.id;
 
         // Supabase realaus laiko prenumerata kvotos atnaujinimui
-        const quotaSubscription = supabaseClient
+        const quotaSubscription = client
             .channel('public:profiles_global')
             .on('postgres_changes', 
                 { 
@@ -539,12 +582,12 @@ const App = () => {
             .subscribe((status) => {
                 if (status === 'SUBSCRIBED') {
                     // Kvota kraunama TIK po sėkmingos prenumeratos
-                    loadQuota();
+                    loadQuota(client);
                 }
             });
 
-        const loadQuota = async () => {
-            const { data, error } = await supabaseClient
+        const loadQuota = async (sbClient) => {
+            const { data, error } = await sbClient
                 .from('profiles')
                 .select('quota')
                 .eq('id', userId)
@@ -560,7 +603,7 @@ const App = () => {
                 setQuota(data.quota);
             } else {
                 // Jei profilis nesukurtas, sukuriame jį su pradine kvota
-                const { error: insertError } = await supabaseClient
+                const { error: insertError } = await sbClient
                     .from('profiles')
                     .insert({ id: userId, quota: INITIAL_QUOTA });
 
@@ -574,18 +617,25 @@ const App = () => {
         };
 
         return () => {
-            supabaseClient.removeChannel(quotaSubscription);
+            if (quotaSubscription) {
+                client.removeChannel(quotaSubscription);
+            }
         };
-    }, [user, supabaseClient]);
+    }, [user, getSupabaseClient]);
 
 
     // Stiliai naudojant Tailwind CSS
+    const client = getSupabaseClient();
+    
     return (
         <div className="flex flex-col h-screen w-full bg-gray-900 font-sans">
+            {/* Supabase CDN importas, kad išspręstume 'Could not resolve' klaidą */}
+            <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
             <script src="https://cdn.tailwindcss.com"></script>
+
             <div className="p-4 bg-gray-800 border-b border-gray-700 shadow-md">
                 <h1 className="text-2xl font-bold text-emerald-400">DI Namams</h1>
-                <p className="text-sm text-gray-400">Vartotojo ID: {user?.id || 'Neautentifikuotas'}</p>
+                <p className="text-sm text-gray-400">Vartotojo ID: {user?.id || 'Kraunamas...'} | DI Modelis: **Google Gemini**</p>
             </div>
             
             <div className="flex flex-col md:flex-row flex-grow overflow-hidden">
@@ -616,25 +666,32 @@ const App = () => {
                 {/* Pagrindinis turinys */}
                 <main className="flex-grow p-4 overflow-y-auto">
                     {loading && (
-                         <div className="flex justify-center items-center h-full text-white text-lg">Kraunami duomenys...</div>
+                         <div className="flex justify-center items-center h-full text-white text-lg">
+                            <Loader2 className="w-6 h-6 mr-2 animate-spin" /> Kraunami duomenys...
+                        </div>
                     )}
-                    {!loading && user && supabaseClient && (
+                    {!loading && user && client && (
                         <>
                             {activeTab === 'chat' && (
                                 <div className="h-full">
-                                    <ChatComponent supabase={supabaseClient} user={user} quota={quota} setQuota={setQuota} />
+                                    <ChatComponent supabase={client} user={user} quota={quota} setQuota={setQuota} />
                                 </div>
                             )}
                             {activeTab === 'plans' && (
                                 <div className="h-full">
-                                    <PlansComponent supabase={supabaseClient} user={user} quota={quota} setQuota={setQuota} />
+                                    <PlansComponent supabase={client} user={user} quota={quota} setQuota={setQuota} />
                                 </div>
                             )}
                         </>
                     )}
-                    {!loading && !user && (
+                    {!loading && !client && user && (
                         <div className="text-center p-8 bg-red-800/20 text-red-300 rounded-lg">
-                            Autentifikacija nepavyko arba Supabase raktai yra neteisingi. Prašome patikrinti `SUPABASE_URL` ir `SUPABASE_ANON_KEY` faile `App.jsx`.
+                            Klaida: Neteisingi Supabase raktai arba inicializacija. Prašome pakeisti pavyzdinius URL ir Key kintamuosius `SUPABASE_URL` ir `SUPABASE_ANON_KEY` faile `App.jsx`. **Supabase kvotų sistema neveiks.**
+                        </div>
+                    )}
+                     {!loading && !user && (
+                        <div className="text-center p-8 bg-red-800/20 text-red-300 rounded-lg">
+                            Autentifikacija nepavyko. DI asistentas veiks, bet kvotos sistema bus išjungta.
                         </div>
                     )}
                 </main>
