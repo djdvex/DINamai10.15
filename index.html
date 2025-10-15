@@ -74,11 +74,10 @@
 </div>
 
 <script>
-    // Konstanta, skirta Gemini API. Paliekama tuščia. Aplinkoje bus pateikta automatiškai.
-    const apiKey = ""; 
-    const apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
-
-    // API užklausos siuntimas su eksponentiniu atsitraukimu (exponential backoff)
+    // API adreso konstanta nukreipia į Vercel Serverless Function
+    const VERCEL_API_ENDPOINT = "/api/generate";
+    
+    // Eksponentinio atsitraukimo funkcija užklausai siųsti (kliento pusė)
     async function fetchWithRetry(url, options, maxRetries = 5, delay = 1000) {
         for (let i = 0; i < maxRetries; i++) {
             try {
@@ -87,14 +86,14 @@
                     return await response.json();
                 }
 
-                // Jei klaida yra susijusi su per dideliu užklausų skaičiumi (429) arba serverio klaida (5xx), bandoma iš naujo
+                // API Klaida, bandoma iš naujo arba pranešama
+                const errorText = await response.text();
                 if (response.status === 429 || response.status >= 500) {
-                    throw new Error(`API Klaida: ${response.status} - ${await response.text()}`);
+                    throw new Error(`Serverio Klaida: ${response.status} - ${errorText}`);
                 }
                 
                 // Kitos klaidos (pvz., 400 Bad Request) nėra pakartotinai bandomos
-                const errorData = await response.json();
-                throw new Error(errorData.error.message || `Klaida: ${response.status}`);
+                throw new Error(`Klaida: ${response.status} - ${errorText}`);
 
             } catch (error) {
                 console.error(`Bandoma iš naujo po klaidos (bandymas ${i + 1}/${maxRetries}):`, error);
@@ -113,7 +112,6 @@
         const prompt = document.getElementById('prompt').value.trim();
         const systemInstruction = document.getElementById('systemInstruction').value.trim();
         
-        const resultsDiv = document.getElementById('results');
         const generatedTextContainer = document.getElementById('generatedTextContainer');
         const generatedTextP = document.getElementById('generatedText');
         const sourcesContainer = document.getElementById('sourcesContainer');
@@ -145,51 +143,30 @@
         loadingSpinner.classList.remove('hidden');
 
         try {
-            // Sukurti API užklausos turinį
-            const payload = {
-                contents: [{ parts: [{ text: prompt }] }],
-                
-                // Įjungti Google Search įrankį pagrindimui
-                tools: [{ "google_search": {} }],
+            // Sukurti duomenų perdavimo struktūrą Vercel API
+            const requestBody = {
+                prompt: prompt,
+                systemInstruction: systemInstruction,
             };
-
-            // Jei pateikta Sistemos instrukcija, pridėti ją prie masyvo
-            if (systemInstruction) {
-                payload.systemInstruction = {
-                    parts: [{ text: systemInstruction }]
-                };
-            }
-
-            const urlWithKey = `${apiUrl}?key=${apiKey}`;
             
-            const result = await fetchWithRetry(urlWithKey, {
+            // Siunčiama užklausa į Vercel Serverless Function
+            const result = await fetchWithRetry(VERCEL_API_ENDPOINT, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(requestBody)
             });
 
-            const candidate = result.candidates?.[0];
+            // Vercel Serverless funkcija grąžins sugeneruotą tekstą ir šaltinius
+            const text = result.text;
+            const sources = result.sources || [];
 
-            if (candidate && candidate.content?.parts?.[0]?.text) {
-                const text = candidate.content.parts[0].text;
-                
+            if (text) {
                 // 1. Rodyti sugeneruotą tekstą
                 generatedTextP.textContent = text;
                 generatedTextContainer.classList.remove('hidden');
                 resultTitle.classList.remove('hidden');
 
                 // 2. Išgauti ir rodyti šaltinius
-                let sources = [];
-                const groundingMetadata = candidate.groundingMetadata;
-                if (groundingMetadata && groundingMetadata.groundingAttributions) {
-                    sources = groundingMetadata.groundingAttributions
-                        .map(attribution => ({
-                            uri: attribution.web?.uri,
-                            title: attribution.web?.title,
-                        }))
-                        .filter(source => source.uri && source.title); 
-                }
-
                 if (sources.length > 0) {
                     sources.forEach(source => {
                         const li = document.createElement('li');
@@ -205,14 +182,14 @@
                 }
 
             } else {
-                // Jei Gemini negrąžino teksto
-                errorText.textContent = 'Atsiprašome, nepavyko sugeneruoti turinio. Bandykite dar kartą.';
+                // Jei API (serverless funkcija) negrąžino teksto
+                errorText.textContent = result.error || 'Atsiprašome, nepavyko sugeneruoti turinio. Patikrinkite Vercel konfigūraciją ir log\'us.';
                 errorMsg.classList.remove('hidden');
             }
 
         } catch (error) {
             console.error('Bendra klaida:', error);
-            errorText.textContent = `Įvyko klaida generuojant turinį: ${error.message}`;
+            errorText.textContent = `Įvyko klaida generuojant turinį: ${error.message}. Patikrinkite Vercel log'us.`;
             errorMsg.classList.remove('hidden');
         } finally {
             // Išjungti įkrovimo būseną
