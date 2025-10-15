@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h2>Test /api/chat</h2>
+    <textarea id="msg" rows="4" cols="50">Hello test!</textarea><br>
+    <input id="uid" placeholder="userId" value="demo123" />
+    <button onclick="send()">Send</button>
+    <pre id="out"></pre>
+
+    <script>
+      async function send() {
+        const message = document.getElementById('msg').value;
+        const userId = document.getElementById('uid').value;
+        const out = document.getElementById('out');
+        out.textContent = 'Loading...';
+
+        const r = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ message, userId })
+        });
+
+        const j = await r.json();
+        out.textContent = JSON.stringify(j, null, 2);
+      }
+    </script>
+  </body>
+</html>
