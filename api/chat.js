@@ -1,5 +1,4 @@
-const fetch = require('node-fetch');
-const { createClient } = require('@supabase/supabase-js');
+import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -23,8 +22,7 @@ async function decrement(userId) {
       return { ok: true, remaining: 20 };
     }
 
-    if (data.remaining_messages <= 0)
-      return { ok: false, remaining: 0 };
+    if (data.remaining_messages <= 0) return { ok: false, remaining: 0 };
 
     const { data: d2 } = await supabaseAdmin
       .from('user_quotas')
@@ -40,20 +38,18 @@ async function decrement(userId) {
   }
 }
 
-module.exports = async (req, res) => {
-  if (req.method !== 'POST') return res.status(405).end();
-
-  const { message, userId } = req.body;
-
-  if (!message) return res.status(400).json({ error: 'missing message' });
-  if (!userId) return res.status(400).json({ error: 'missing userId' });
-
-  const q = await decrement(userId);
-  if (!q.ok) return res.status(403).json({ error: 'no quota' });
-
+export async function POST(req) {
   try {
+    const { message, userId } = await req.json();
+
+    if (!message) return new Response(JSON.stringify({ error: 'missing message' }), { status: 400 });
+    if (!userId) return new Response(JSON.stringify({ error: 'missing userId' }), { status: 400 });
+
+    const q = await decrement(userId);
+    if (!q.ok) return new Response(JSON.stringify({ error: 'no quota' }), { status: 403 });
+
     const payload = {
-      model: 'gpt-4o-mini',
+      model: 'gpt-3.5-turbo', // testui geriau naudoti 3.5
       messages: [
         { role: 'system', content: 'You are DI Namams assistant.' },
         { role: 'user', content: message },
@@ -71,11 +67,18 @@ module.exports = async (req, res) => {
     });
 
     const j = await r.json();
+
+    // debug – parodo visą OpenAI JSON atsakymą
+    console.log('OpenAI response:', j);
+
     const text = j?.choices?.[0]?.message?.content || 'Error';
 
-    return res.status(200).json({ text, remaining: q.remaining });
+    return new Response(JSON.stringify({ text, remaining: q.remaining, debug: j }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
   } catch (e) {
     console.error('OpenAI request failed:', e);
-    return res.status(500).json({ error: 'openai fail' });
+    return new Response(JSON.stringify({ error: 'openai fail' }), { status: 500 });
   }
-};
+}
